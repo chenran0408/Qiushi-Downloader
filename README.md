@@ -96,3 +96,12 @@ java -jar epubcheck.jar 求是_2025年第1期.epub
 ```
 
 期刊文章和图片仍受原版权及网站使用规则约束，请仅用于个人离线阅读和归档。
+## 下一阶段质量报告
+
+每个 EPUB 旁边会生成同名 `.quality.json` 报告，分别记录内容完整性和 EPUB 包结构检查结果。命令行也可以单独运行：
+
+```text
+python -m quality <文件.epub>
+```
+
+这项本地检查用于快速发现缺失资源、错误 manifest 和损坏容器；正式发布前仍建议用 EPUBCheck 做标准符合性验证。

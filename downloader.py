@@ -31,6 +31,7 @@ from models import Issue, DownloadState
 from scraper import registry, ScrapeError
 from pdf_builder import build_issue_html, PdfBridge
 from epub_builder import build_issue_epub, build_year_epub
+from quality import validate_epub, write_quality_report
 from config import config
 
 log = logging.getLogger("qiushi.downloader")
@@ -168,9 +169,11 @@ class DownloadWorker(QThread):
         if config.output_format in ("epub", "both"):
             self.issue_progress.emit(issue, 0.85, "正在生成 EPUB…")
             report = build_issue_epub(issue, epub_target, cache_dir=out_dir / ".cache" / "resources")
-            if not report.complete:
+            package_report = validate_epub(epub_target)
+            write_quality_report(epub_target, {"content": report.as_dict(), "package": package_report})
+            if not report.complete or not package_report["valid"]:
                 issue.state = DownloadState.FAILED
-                issue.error = f"EPUB 内容检查未通过：{report.as_dict()}"
+                issue.error = f"EPUB 质量检查未通过：{report.as_dict()} / {package_report}"
                 self.issue_failed.emit(issue, issue.error)
                 return
         if config.output_format in ("pdf", "both"):
@@ -201,7 +204,9 @@ class DownloadWorker(QThread):
             source.fetch_issue_detail(issue)
         target = Path(config.output_dir) / f"求是_{year}年合订本.epub"
         report = build_year_epub(issues, target, cache_dir=Path(config.output_dir) / ".cache" / "resources")
-        if report.complete:
+        package_report = validate_epub(target)
+        write_quality_report(target, {"content": report.as_dict(), "package": package_report})
+        if report.complete and package_report["valid"]:
             self.log_message.emit(f"已生成年度合订本：{target.name}")
         else:
-            self.log_message.emit(f"年度合订本内容不完整，已生成但请查看报告：{report.as_dict()}")
+            self.log_message.emit(f"年度合订本质量检查未通过，请查看报告：{target.with_suffix('.quality.json').name}")
