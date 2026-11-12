@@ -72,6 +72,14 @@ class AppConfig:
         self._settings.setValue("output_format", value)
 
     @property
+    def overwrite_existing(self) -> bool:
+        return self._settings.value("overwrite_existing", False, type=bool)
+
+    @overwrite_existing.setter
+    def overwrite_existing(self, value: bool):
+        self._settings.setValue("overwrite_existing", value)
+
+    @property
     def output_dir(self) -> Path:
         val = self._settings.value("output_dir", str(default_output_dir()))
         path = Path(val)

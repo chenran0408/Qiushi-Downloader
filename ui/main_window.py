@@ -207,6 +207,9 @@ class SettingsDialog(QDialog):
         idx = self.format_combo.findData(config.output_format)
         self.format_combo.setCurrentIndex(max(idx, 0))
 
+        self.overwrite_box = QCheckBox("覆盖已有文件")
+        self.overwrite_box.setChecked(config.overwrite_existing)
+
         self.autocheck_box = QCheckBox("自动检查新一期并下载")
         self.autocheck_box.setChecked(config.auto_check_enabled)
 
@@ -218,6 +221,7 @@ class SettingsDialog(QDialog):
         form = QFormLayout()
         form.addRow("保存位置", out_row_w)
         form.addRow("输出格式", self.format_combo)
+        form.addRow("文件处理", self.overwrite_box)
         form.addRow("外观", self.theme_combo)
         form.addRow("内容来源", self.source_combo)
         form.addRow("请求间隔（礼貌抓取，避免过快请求）", self.delay_spin)
@@ -240,6 +244,7 @@ class SettingsDialog(QDialog):
     def save(self):
         config.output_dir = self.output_edit.text()
         config.output_format = self.format_combo.currentData()
+        config.overwrite_existing = self.overwrite_box.isChecked()
         config.theme_mode = self.theme_combo.currentData()
         config.active_source_id = self.source_combo.currentData()
         config.request_delay_seconds = self.delay_spin.value() / 1000.0

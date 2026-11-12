@@ -95,7 +95,11 @@ class DownloadWorker(QThread):
 
     # -- QThread main loop --------------------------------------------------
     def run(self):
-        source = registry.get(self._source_id, delay_seconds=config.request_delay_seconds)
+        source = registry.get(
+            self._source_id,
+            delay_seconds=config.request_delay_seconds,
+            cache_dir=Path(config.output_dir) / ".cache" / "html",
+        )
         while self._running:
             try:
                 job = self._queue.get(timeout=0.25)
@@ -137,7 +141,7 @@ class DownloadWorker(QThread):
         if not targets:
             targets = [pdf_target]
 
-        if all(target.exists() for target in targets):
+        if not config.overwrite_existing and all(target.exists() for target in targets):
             issue.state = DownloadState.SKIPPED
             issue.output_path = str(targets[0])
             self.log_message.emit(f"已存在，跳过：{targets[0].name}")
@@ -214,6 +218,9 @@ class DownloadWorker(QThread):
                 issue.failed_articles.append(f"期号抓取失败：{issue.title} ({exc})")
                 self.log_message.emit(f"跳过失败期号：{issue.title}；年度合订本将标记为不完整")
         target = Path(config.output_dir) / f"求是_{year}年合订本.epub"
+        if target.exists() and not config.overwrite_existing:
+            self.log_message.emit(f"年度合订本已存在，跳过：{target.name}")
+            return
         try:
             report = build_year_epub(issues, target, cache_dir=Path(config.output_dir) / ".cache" / "resources")
             package_report = validate_epub(target)

@@ -8,6 +8,7 @@ import time
 import uuid
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -73,8 +74,8 @@ def _clean_fragment(fragment: str, base_url: str, fetcher: ResourceFetcher, repo
             except Exception: report.failed_resources.append(absolute); node.decompose()
     return "".join(str(x) for x in root.contents).strip()
 
-def _xhtml(title: str, body: str) -> bytes:
-    return (f'<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN"><head><meta charset="utf-8"/><title>{html.escape(title)}</title><link rel="stylesheet" type="text/css" href="../styles/style.css"/></head><body>{body}</body></html>').encode()
+def _xhtml(title: str, body: str, stylesheet: str = "../styles/style.css") -> bytes:
+    return (f'<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN"><head><meta charset="utf-8"/><title>{html.escape(title)}</title><link rel="stylesheet" type="text/css" href="{stylesheet}"/></head><body>{body}</body></html>').encode()
 
 def _slug(index: int, title: str) -> str:
     safe = re.sub(r"[^\w\-]+", "_", title, flags=re.UNICODE).strip("_")[:60] or "article"; return f"text/{index:04d}-{safe}.xhtml"
@@ -92,6 +93,17 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
         if a.title in seen: report.duplicate_titles.append(a.title)
         seen.add(a.title)
     fetcher = fetcher or ResourceFetcher(cache_dir); resources = {}; pages = []; idx = 0
+    cover_href = ""
+    cover_url = next((issue.cover_image_url for issue in issues if issue.cover_image_url), "")
+    if cover_url:
+        try:
+            cover_data, cover_type = fetcher.fetch(cover_url)
+            cover_ext = mimetypes.guess_extension(cover_type) or Path(urlparse(cover_url).path).suffix or ".bin"
+            cover_name = f"images/cover-{hashlib.sha256(cover_data).hexdigest()[:16]}{cover_ext.lower()}"
+            resources[cover_name] = (cover_type or "application/octet-stream", cover_data, cover_url)
+            cover_href = f"../{cover_name}"
+        except Exception:
+            report.failed_resources.append(cover_url)
     for issue in issues:
         if len(issues) > 1: pages.append((f"text/issue-{issue.issue_no:03d}.xhtml", _xhtml(issue.title, f'<h1 class="issue-title">{html.escape(issue.title)}</h1>')))
         for article in issue.articles:
@@ -99,11 +111,13 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
             cleaned = _clean_fragment(article.html_body, article.url, fetcher, report, resources)
             if not cleaned: report.missing_articles.append(article.title); continue
             pages.append((path, _xhtml(article.title, body + cleaned))); report.written_articles += 1
-    nav_items = "".join(f'<li><a href="{p}">{html.escape(Path(p).stem)}</a></li>' for p,_ in pages); nav = _xhtml(title, f"<h1>{html.escape(title)}</h1><ol class=\"toc\">{nav_items}</ol>"); cover = _xhtml(title, f'<section class="cover"><h1>{html.escape(title)}</h1><p>个人离线阅读归档</p></section>')
+    nav_items = "".join(f'<li><a href="{p}">{html.escape(Path(p).stem)}</a></li>' for p,_ in pages); nav = _xhtml(title, f"<h1>{html.escape(title)}</h1><ol class=\"toc\">{nav_items}</ol>", "styles/style.css"); cover_img = f'<img src="{cover_href}" alt="封面"/>' if cover_href else ""; cover = _xhtml(title, f'<section class="cover">{cover_img}<h1>{html.escape(title)}</h1><p>个人离线阅读归档</p></section>')
     manifest = ['<item id="nav" properties="nav" href="nav.xhtml" media-type="application/xhtml+xml"/>','<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>','<item id="style" href="styles/style.css" media-type="text/css"/>','<item id="cover" href="text/cover.xhtml" media-type="application/xhtml+xml"/>']; spine = ['<itemref idref="cover"/>']
     for n,(path,_) in enumerate(pages): manifest.append(f'<item id="p{n}" href="{path}" media-type="application/xhtml+xml"/>'); spine.append(f'<itemref idref="p{n}"/>')
-    for n,(path,(ctype,_,_)) in enumerate(resources.items()): manifest.append(f'<item id="img{n}" href="{path}" media-type="{ctype}"/>')
-    uid = str(uuid.uuid4()); opf = f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:{uid}</dc:identifier><dc:title>{html.escape(title)}</dc:title><dc:language>zh-CN</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest>{"".join(manifest)}</manifest><spine toc="ncx">{"".join(spine)}</spine></package>'.encode()
+    for n,(path,(ctype,_,_)) in enumerate(resources.items()):
+        prop = ' properties="cover-image"' if path == cover_href.removeprefix("../") else ""
+        manifest.append(f'<item id="img{n}" href="{path}" media-type="{ctype}"{prop}/>')
+    uid = str(uuid.uuid4()); modified = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"); opf = f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:{uid}</dc:identifier><dc:title>{html.escape(title)}</dc:title><dc:language>zh-CN</dc:language><meta property="dcterms:modified">{modified}</meta></metadata><manifest>{"".join(manifest)}</manifest><spine toc="ncx">{"".join(spine)}</spine></package>'.encode()
     ncx_items = ''.join(f'<navPoint id="n{i}" playOrder="{i}"><navLabel><text>{html.escape(Path(p).stem)}</text></navLabel><content src="{p}"/></navPoint>' for i,(p,_) in enumerate(pages,1)); ncx = f'<?xml version="1.0" encoding="UTF-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="urn:uuid:{uid}"/></head><docTitle><text>{html.escape(title)}</text></docTitle><navMap>{ncx_items}</navMap></ncx>'.encode()
     out = Path(output_path); out.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out,"w") as z:

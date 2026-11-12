@@ -104,4 +104,6 @@ java -jar epubcheck.jar 求是_2025年第1期.epub
 python -m quality <文件.epub>
 ```
 
+如果已下载 EPUBCheck，也可以一起运行：`python -m quality <文件.epub> --epubcheck epubcheck.jar`。
+
 这项本地检查用于快速发现缺失资源、错误 manifest 和损坏容器；正式发布前仍建议用 EPUBCheck 做标准符合性验证。

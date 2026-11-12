@@ -28,11 +28,13 @@ from __future__ import annotations
 import re
 import time
 import logging
+import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional
 from urllib.parse import urljoin, urlparse
+from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
@@ -76,17 +78,31 @@ class SourcePlugin(ABC):
     id: str = "base"
     display_name: str = "Base source"
 
-    def __init__(self, delay_seconds: float = 0.6):
+    def __init__(self, delay_seconds: float = 0.6, cache_dir: str | Path | None = None):
         self.delay_seconds = delay_seconds
         self.session = _session()
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        if self.cache_dir:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _get(self, url: str) -> BeautifulSoup:
+        cached_body = cached_meta = None
+        if self.cache_dir:
+            key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+            cached_body = self.cache_dir / f"{key}.html"
+            cached_meta = self.cache_dir / f"{key}.meta"
+            if cached_body.exists() and cached_meta.exists():
+                encoding = cached_meta.read_text(encoding="utf-8") or "utf-8"
+                return BeautifulSoup(cached_body.read_text(encoding=encoding, errors="replace"), "lxml")
         last = None
         for attempt in range(3):
             try:
                 resp = self.session.get(url, timeout=20)
                 resp.raise_for_status()
                 resp.encoding = resp.apparent_encoding or "utf-8"
+                if cached_body and cached_meta:
+                    cached_body.write_bytes(resp.content)
+                    cached_meta.write_text(resp.encoding or "utf-8", encoding="utf-8")
                 time.sleep(self.delay_seconds)
                 return BeautifulSoup(resp.text, "lxml")
             except requests.RequestException as exc:
