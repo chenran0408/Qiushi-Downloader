@@ -168,9 +168,15 @@ class DownloadWorker(QThread):
         report = None
         if config.output_format in ("epub", "both"):
             self.issue_progress.emit(issue, 0.85, "正在生成 EPUB…")
-            report = build_issue_epub(issue, epub_target, cache_dir=out_dir / ".cache" / "resources")
-            package_report = validate_epub(epub_target)
-            write_quality_report(epub_target, {"content": report.as_dict(), "package": package_report})
+            try:
+                report = build_issue_epub(issue, epub_target, cache_dir=out_dir / ".cache" / "resources")
+                package_report = validate_epub(epub_target)
+                write_quality_report(epub_target, {"content": report.as_dict(), "package": package_report})
+            except Exception as exc:
+                issue.state = DownloadState.FAILED
+                issue.error = f"EPUB 生成失败：{exc}"
+                self.issue_failed.emit(issue, issue.error)
+                return
             if not report.complete or not package_report["valid"]:
                 issue.state = DownloadState.FAILED
                 issue.error = f"EPUB 质量检查未通过：{report.as_dict()} / {package_report}"
@@ -201,11 +207,20 @@ class DownloadWorker(QThread):
         for issue in sorted(issues, key=lambda i: i.sort_key):
             if issue.articles:
                 continue
-            source.fetch_issue_detail(issue)
+            try:
+                source.fetch_issue_detail(issue)
+            except ScrapeError as exc:
+                issue.expected_article_count = max(issue.expected_article_count, 1)
+                issue.failed_articles.append(f"期号抓取失败：{issue.title} ({exc})")
+                self.log_message.emit(f"跳过失败期号：{issue.title}；年度合订本将标记为不完整")
         target = Path(config.output_dir) / f"求是_{year}年合订本.epub"
-        report = build_year_epub(issues, target, cache_dir=Path(config.output_dir) / ".cache" / "resources")
-        package_report = validate_epub(target)
-        write_quality_report(target, {"content": report.as_dict(), "package": package_report})
+        try:
+            report = build_year_epub(issues, target, cache_dir=Path(config.output_dir) / ".cache" / "resources")
+            package_report = validate_epub(target)
+            write_quality_report(target, {"content": report.as_dict(), "package": package_report})
+        except Exception as exc:
+            self.log_message.emit(f"年度 EPUB 生成失败：{exc}")
+            return
         if report.complete and package_report["valid"]:
             self.log_message.emit(f"已生成年度合订本：{target.name}")
         else:
