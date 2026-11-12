@@ -15,6 +15,9 @@ def validate_epub(path: str | Path) -> dict:
     try:
         with zipfile.ZipFile(path) as z:
             names = set(z.namelist())
+            entries = z.infolist()
+            if not entries or entries[0].filename != "mimetype" or entries[0].compress_type != zipfile.ZIP_STORED:
+                result["errors"].append("mimetype must be the first uncompressed ZIP entry")
             if "mimetype" not in names or z.read("mimetype") != b"application/epub+zip":
                 result["errors"].append("mimetype missing or not first-class EPUB value")
             container = ET.fromstring(z.read("META-INF/container.xml"))
@@ -31,7 +34,10 @@ def validate_epub(path: str | Path) -> dict:
             for item in opf.findall(".//{*}manifest/{*}item"):
                 href = item.attrib.get("href", "")
                 target = posixpath.normpath(posixpath.join(base, href))
-                manifest[item.attrib.get("id", "")] = target
+                item_id = item.attrib.get("id", "")
+                if not item_id or item_id in manifest:
+                    result["errors"].append(f"duplicate or empty manifest id: {item_id}")
+                manifest[item_id] = target
                 if target not in names:
                     result["errors"].append(f"manifest target missing: {target}")
             if not opf.find(".//{*}spine") is not None:

@@ -106,6 +106,8 @@ python -m quality <文件.epub>
 
 如果已下载 EPUBCheck，也可以一起运行：`python -m quality <文件.epub> --epubcheck epubcheck.jar`。
 
+年度 EPUB 任务会显示已处理期数，并可在界面中取消。生成的文章页会保留期号、发布日期、作者和原文链接。
+
 这项本地检查用于快速发现缺失资源、错误 manifest 和损坏容器；正式发布前仍建议用 EPUBCheck 做标准符合性验证。
 
 Implementation notes and reference-project decisions are documented in [docs/EPUB_DESIGN.md](docs/EPUB_DESIGN.md).

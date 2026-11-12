@@ -117,7 +117,12 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
             pages.append((issue_path, _xhtml(issue.title, f'<h1 class="issue-title">{html.escape(issue.title)}</h1>')))
             page_titles[issue_path] = issue.title
         for article in issue.articles:
-            idx += 1; path = _slug(idx, article.title); body = f"<h1>{html.escape(article.title)}</h1>" + (f"<p><em>{html.escape(article.author)}</em></p>" if article.author else "")
+            idx += 1; path = _slug(idx, article.title)
+            metadata = f"<p><em>{html.escape(issue.title)}"
+            if issue.display_date: metadata += f" · {html.escape(issue.display_date)}"
+            if article.author: metadata += f" · {html.escape(article.author)}"
+            metadata += f'</em></p><p><a href="{html.escape(article.url, quote=True)}">原文链接</a></p>'
+            body = f"<h1>{html.escape(article.title)}</h1>{metadata}"
             cleaned = _clean_fragment(article.html_body, article.url, fetcher, report, resources)
             if not cleaned: report.missing_articles.append(article.title); continue
             pages.append((path, _xhtml(article.title, body + cleaned))); page_titles[path] = article.title; report.written_articles += 1
@@ -127,7 +132,7 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
     for n,(path,(ctype,_,_)) in enumerate(resources.items()):
         prop = ' properties="cover-image"' if path == cover_href.removeprefix("../") else ""
         manifest.append(f'<item id="img{n}" href="{path}" media-type="{ctype}"{prop}/>')
-    uid = str(uuid.uuid4()); modified = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"); opf = f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:{uid}</dc:identifier><dc:title>{html.escape(title)}</dc:title><dc:language>zh-CN</dc:language><meta property="dcterms:modified">{modified}</meta></metadata><manifest>{"".join(manifest)}</manifest><spine toc="ncx">{"".join(spine)}</spine></package>'.encode()
+    uid = str(uuid.uuid4()); modified = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"); source_meta = "".join(f"<dc:source>{html.escape(issue.toc_url)}</dc:source>" for issue in issues if issue.toc_url); opf = f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:{uid}</dc:identifier><dc:title>{html.escape(title)}</dc:title><dc:language>zh-CN</dc:language>{source_meta}<meta property="dcterms:modified">{modified}</meta></metadata><manifest>{"".join(manifest)}</manifest><spine toc="ncx">{"".join(spine)}</spine></package>'.encode()
     ncx_items = ''.join(f'<navPoint id="n{i}" playOrder="{i}"><navLabel><text>{html.escape(page_titles[p])}</text></navLabel><content src="{p}"/></navPoint>' for i,(p,_) in enumerate(pages,1)); ncx = f'<?xml version="1.0" encoding="UTF-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="urn:uuid:{uid}"/></head><docTitle><text>{html.escape(title)}</text></docTitle><navMap>{ncx_items}</navMap></ncx>'.encode()
     out = Path(output_path); out.parent.mkdir(parents=True, exist_ok=True); temp = out.with_name(f".{out.name}.tmp")
     try:

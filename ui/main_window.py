@@ -435,6 +435,9 @@ class MainWindow(QMainWindow):
 
         self.year_epub_btn = QPushButton("生成年度 EPUB")
         self.year_epub_btn.clicked.connect(self._build_year_epub)
+        self.year_cancel_btn = QPushButton("取消年度任务")
+        self.year_cancel_btn.setEnabled(False)
+        self.year_cancel_btn.clicked.connect(self._cancel_year_epub)
 
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.worker.request_years)
@@ -444,6 +447,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.download_all_btn)
         layout.addWidget(self.year_epub_btn)
+        layout.addWidget(self.year_cancel_btn)
         layout.addWidget(refresh_btn)
         layout.addWidget(settings_btn)
         return bar
@@ -484,6 +488,9 @@ class MainWindow(QMainWindow):
         self.worker.issue_done.connect(self._on_issue_done)
         self.worker.issue_failed.connect(self._on_issue_failed)
         self.worker.log_message.connect(self._log)
+        self.worker.year_progress.connect(self._on_year_progress)
+        self.worker.year_done.connect(lambda _path: self._set_year_busy(False))
+        self.worker.year_failed.connect(lambda _error: self._set_year_busy(False))
 
     # -- slots ------------------------------------------------------------
     def _on_years_ready(self, years: list[tuple[int, str]]):
@@ -551,8 +558,20 @@ class MainWindow(QMainWindow):
     def _build_year_epub(self):
         issues = [row.issue for row in self._rows.values()]
         if issues:
+            self._set_year_busy(True)
             self.worker.request_year_epub(issues)
             self._log(f"已提交 {issues[0].year} 年 EPUB 合订本任务…")
+
+    def _cancel_year_epub(self):
+        self.worker.cancel_year_epub()
+        self._log("正在取消年度 EPUB 任务…")
+
+    def _set_year_busy(self, busy: bool):
+        self.year_epub_btn.setEnabled(not busy)
+        self.year_cancel_btn.setEnabled(busy)
+
+    def _on_year_progress(self, year: int, completed: int, total: int, phase: str):
+        self._log(f"{year} 年年度 EPUB：{completed}/{total}，{phase}")
 
     def _open_settings(self):
         dlg = SettingsDialog(self.theme, self)

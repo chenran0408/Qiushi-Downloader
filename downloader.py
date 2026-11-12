@@ -67,12 +67,16 @@ class DownloadWorker(QThread):
     issue_done = Signal(object)                 # issue (state=DONE)
     issue_failed = Signal(object, str)          # issue, error text
     log_message = Signal(str)
+    year_progress = Signal(int, int, int, str)  # year, completed, total, phase
+    year_done = Signal(str)
+    year_failed = Signal(str)
 
     def __init__(self, pdf_bridge: PdfBridge, parent: QObject | None = None):
         super().__init__(parent)
         self._pdf_bridge = pdf_bridge
         self._queue: Queue[_Job] = Queue()
         self._running = True
+        self._cancel_year = False
         self._source_id = config.active_source_id
 
     # -- public, thread-safe entry points ---------------------------------
@@ -87,7 +91,11 @@ class DownloadWorker(QThread):
 
     def request_year_epub(self, issues: list[Issue]):
         """Queue a year-book build from already fetched issues."""
+        self._cancel_year = False
         self._queue.put(_Job("year_epub", issues))
+
+    def cancel_year_epub(self):
+        self._cancel_year = True
 
     def stop(self):
         self._running = False
@@ -208,8 +216,16 @@ class DownloadWorker(QThread):
             return
         year = issues[0].year
         self.log_message.emit(f"正在抓取 {year} 年内容并生成合订本…")
-        for issue in sorted(issues, key=lambda i: i.sort_key):
+        ordered = sorted(issues, key=lambda i: i.sort_key)
+        total = len(ordered)
+        for completed, issue in enumerate(ordered, start=1):
+            if self._cancel_year:
+                self._cancel_year = False
+                self.log_message.emit(f"已取消 {year} 年年度 EPUB 任务")
+                self.year_failed.emit("年度任务已取消")
+                return
             if issue.articles:
+                self.year_progress.emit(year, completed, total, f"已缓存 {issue.title}")
                 continue
             try:
                 source.fetch_issue_detail(issue)
@@ -217,9 +233,11 @@ class DownloadWorker(QThread):
                 issue.expected_article_count = max(issue.expected_article_count, 1)
                 issue.failed_articles.append(f"期号抓取失败：{issue.title} ({exc})")
                 self.log_message.emit(f"跳过失败期号：{issue.title}；年度合订本将标记为不完整")
+            self.year_progress.emit(year, completed, total, f"已处理 {issue.title}")
         target = Path(config.output_dir) / f"求是_{year}年合订本.epub"
         if target.exists() and not config.overwrite_existing:
             self.log_message.emit(f"年度合订本已存在，跳过：{target.name}")
+            self.year_done.emit(str(target))
             return
         try:
             report = build_year_epub(issues, target, cache_dir=Path(config.output_dir) / ".cache" / "resources")
@@ -227,8 +245,11 @@ class DownloadWorker(QThread):
             write_quality_report(target, {"content": report.as_dict(), "package": package_report})
         except Exception as exc:
             self.log_message.emit(f"年度 EPUB 生成失败：{exc}")
+            self.year_failed.emit(str(exc))
             return
         if report.complete and package_report["valid"]:
             self.log_message.emit(f"已生成年度合订本：{target.name}")
+            self.year_done.emit(str(target))
         else:
             self.log_message.emit(f"年度合订本质量检查未通过，请查看报告：{target.with_suffix('.quality.json').name}")
+            self.year_failed.emit("年度合订本质量检查未通过")

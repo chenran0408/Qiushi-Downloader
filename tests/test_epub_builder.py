@@ -28,6 +28,7 @@ class EpubBuilderTests(unittest.TestCase):
                 self.assertIn('<strong>正文</strong>', body)
                 self.assertNotIn('alert(1)', body)
                 self.assertNotIn('bad{}', body)
+                self.assertIn('原文链接', body)
                 self.assertTrue(any(n.startswith('OEBPS/images/') for n in names))
                 self.assertIn('cover-image', z.read('OEBPS/content.opf').decode())
                 self.assertIn('第一篇', z.read('OEBPS/nav.xhtml').decode())
