@@ -30,6 +30,7 @@ from PySide6.QtCore import QThread, Signal, QObject
 from models import Issue, DownloadState
 from scraper import registry, ScrapeError
 from pdf_builder import build_issue_html, PdfBridge
+from epub_builder import build_issue_epub, build_year_epub
 from config import config
 
 log = logging.getLogger("qiushi.downloader")
@@ -83,6 +84,10 @@ class DownloadWorker(QThread):
     def request_download(self, issue: Issue):
         self._queue.put(_Job("download", issue))
 
+    def request_year_epub(self, issues: list[Issue]):
+        """Queue a year-book build from already fetched issues."""
+        self._queue.put(_Job("year_epub", issues))
+
     def stop(self):
         self._running = False
         self._queue.put(_Job("__stop__"))
@@ -106,6 +111,8 @@ class DownloadWorker(QThread):
                     self._handle_issues(source, year, url)
                 elif job.kind == "download":
                     self._handle_download(source, job.payload)
+                elif job.kind == "year_epub":
+                    self._handle_year_epub(source, job.payload)
             except Exception as exc:  # never let the worker die silently
                 log.exception("worker job failed")
                 self.log_message.emit(f"发生错误：{exc}")
@@ -123,12 +130,16 @@ class DownloadWorker(QThread):
 
     def _handle_download(self, source, issue: Issue):
         out_dir = Path(config.output_dir)
-        target = out_dir / safe_filename(issue)
+        pdf_target = out_dir / safe_filename(issue)
+        epub_target = pdf_target.with_suffix(".epub")
+        targets = [p for p, enabled in ((pdf_target, config.output_format in ("pdf", "both")), (epub_target, config.output_format in ("epub", "both"))) if enabled]
+        if not targets:
+            targets = [pdf_target]
 
-        if target.exists():
+        if all(target.exists() for target in targets):
             issue.state = DownloadState.SKIPPED
-            issue.output_path = str(target)
-            self.log_message.emit(f"已存在，跳过：{target.name}")
+            issue.output_path = str(targets[0])
+            self.log_message.emit(f"已存在，跳过：{targets[0].name}")
             self.issue_done.emit(issue)
             return
 
@@ -153,20 +164,44 @@ class DownloadWorker(QThread):
             return
 
         issue.state = DownloadState.RENDERING
-        self.issue_progress.emit(issue, 0.85, "正在排版生成 PDF…")
-
-        html_doc = build_issue_html(issue)
-        ok, err = self._pdf_bridge.render_blocking(html_doc, str(target))
-
-        if not ok:
-            issue.state = DownloadState.FAILED
-            issue.error = err or "PDF 渲染失败"
-            self.issue_failed.emit(issue, issue.error)
-            return
+        report = None
+        if config.output_format in ("epub", "both"):
+            self.issue_progress.emit(issue, 0.85, "正在生成 EPUB…")
+            report = build_issue_epub(issue, epub_target, cache_dir=out_dir / ".cache" / "resources")
+            if not report.complete:
+                issue.state = DownloadState.FAILED
+                issue.error = f"EPUB 内容检查未通过：{report.as_dict()}"
+                self.issue_failed.emit(issue, issue.error)
+                return
+        if config.output_format in ("pdf", "both"):
+            self.issue_progress.emit(issue, 0.9, "正在排版生成 PDF…")
+            ok, err = self._pdf_bridge.render_blocking(build_issue_html(issue), str(pdf_target))
+            if not ok:
+                issue.state = DownloadState.FAILED
+                issue.error = err or "PDF 渲染失败"
+                self.issue_failed.emit(issue, issue.error)
+                return
 
         issue.state = DownloadState.DONE
-        issue.output_path = str(target)
+        issue.output_path = str(targets[0])
         issue.progress = 1.0
         self.issue_progress.emit(issue, 1.0, "完成")
-        self.log_message.emit(f"已生成：{target.name}")
+        self.log_message.emit("已生成：" + ", ".join(p.name for p in targets))
         self.issue_done.emit(issue)
+
+    def _handle_year_epub(self, source, issues: list[Issue]):
+        if not issues:
+            self.log_message.emit("没有可合订的期刊")
+            return
+        year = issues[0].year
+        self.log_message.emit(f"正在抓取 {year} 年内容并生成合订本…")
+        for issue in sorted(issues, key=lambda i: i.sort_key):
+            if issue.articles:
+                continue
+            source.fetch_issue_detail(issue)
+        target = Path(config.output_dir) / f"求是_{year}年合订本.epub"
+        report = build_year_epub(issues, target, cache_dir=Path(config.output_dir) / ".cache" / "resources")
+        if report.complete:
+            self.log_message.emit(f"已生成年度合订本：{target.name}")
+        else:
+            self.log_message.emit(f"年度合订本内容不完整，已生成但请查看报告：{report.as_dict()}")

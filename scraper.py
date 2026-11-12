@@ -81,11 +81,19 @@ class SourcePlugin(ABC):
         self.session = _session()
 
     def _get(self, url: str) -> BeautifulSoup:
-        resp = self.session.get(url, timeout=20)
-        resp.raise_for_status()
-        resp.encoding = resp.apparent_encoding or "utf-8"
-        time.sleep(self.delay_seconds)
-        return BeautifulSoup(resp.text, "lxml")
+        last = None
+        for attempt in range(3):
+            try:
+                resp = self.session.get(url, timeout=20)
+                resp.raise_for_status()
+                resp.encoding = resp.apparent_encoding or "utf-8"
+                time.sleep(self.delay_seconds)
+                return BeautifulSoup(resp.text, "lxml")
+            except requests.RequestException as exc:
+                last = exc
+                if attempt < 2:
+                    time.sleep(0.5 * (2 ** attempt))
+        raise ScrapeError(f"请求失败（已重试 3 次）: {url}: {last}")
 
     @abstractmethod
     def list_year_pages(self) -> list[tuple[int, str]]:
@@ -205,11 +213,13 @@ class QstheorySource(SourcePlugin):
             raise ScrapeError(f"未能在期号目录页解析出文章列表: {issue.toc_url}")
 
         total = len(article_links)
+        issue.expected_article_count = total
         for idx, (title, url) in enumerate(article_links, start=1):
             try:
                 article = self._parse_article(title, url)
                 issue.articles.append(article)
             except Exception as exc:  # keep going — one bad article shouldn't kill the issue
+                issue.failed_articles.append(title)
                 log.warning("跳过无法解析的文章 %s (%s): %s", title, url, exc)
             if progress_cb:
                 progress_cb(idx / total)
@@ -305,38 +315,26 @@ class QstheorySource(SourcePlugin):
 
     @staticmethod
     def _sanitize_content(node, base_url: str) -> tuple[str, list[str]]:
-        """Rebuild a minimal, consistently-styled HTML snippet from a messy node."""
-        parts: list[str] = []
+        """Keep semantic inline/block markup while removing page chrome."""
+        allowed = {"p", "strong", "b", "em", "i", "u", "a", "h2", "h3", "h4", "ul", "ol", "li", "blockquote", "img", "br", "table", "thead", "tbody", "tr", "th", "td", "sup", "sub"}
         images: list[str] = []
-
-        for el in node.find_all(["p", "h2", "h3", "h4", "img", "blockquote", "li"], recursive=True):
+        root = BeautifulSoup(str(node), "lxml")
+        for el in list(root.find_all(True)):
+            if el.name not in allowed:
+                el.unwrap()
+                continue
+            for attr in list(el.attrs):
+                if attr not in {"href", "src", "alt", "title", "colspan", "rowspan"}:
+                    del el.attrs[attr]
             if el.name == "img":
                 src = el.get("src") or el.get("data-src") or ""
                 if not src or any(h in src for h in _SKIP_IMAGE_HINTS):
-                    continue
-                abs_src = urljoin(base_url, src)
-                images.append(abs_src)
-                parts.append(f'<img src="{abs_src}" />')
-                continue
-
-            text = el.get_text(" ", strip=True)
-            if not text:
-                continue
-            if el.name in ("h2", "h3", "h4"):
-                parts.append(f"<h3>{text}</h3>")
-            elif el.name == "blockquote":
-                parts.append(f"<blockquote>{text}</blockquote>")
-            elif el.name == "li":
-                parts.append(f"<li>{text}</li>")
-            else:
-                parts.append(f"<p>{text}</p>")
-
-        if not parts:
-            # Degenerate case: no tagged children found — dump raw text.
-            text = node.get_text("\n\n", strip=True)
-            parts = [f"<p>{p}</p>" for p in text.split("\n\n") if p.strip()]
-
-        return "\n".join(parts), images
+                    el.decompose(); continue
+                abs_src = urljoin(base_url, src); images.append(abs_src); el.attrs = {"src": abs_src, "alt": el.get("alt", "")}
+            elif el.name == "a" and el.get("href", "").lower().startswith(("javascript:", "data:")):
+                el.unwrap()
+        body = root.body or root
+        return "".join(str(child) for child in body.contents).strip(), images
 
 
 # ---------------------------------------------------------------------------

@@ -200,6 +200,13 @@ class SettingsDialog(QDialog):
         self.delay_spin.setSingleStep(100)
         self.delay_spin.setValue(int(config.request_delay_seconds * 1000))
 
+        self.format_combo = QComboBox()
+        self.format_combo.addItem("PDF", "pdf")
+        self.format_combo.addItem("EPUB 3", "epub")
+        self.format_combo.addItem("PDF + EPUB 3", "both")
+        idx = self.format_combo.findData(config.output_format)
+        self.format_combo.setCurrentIndex(max(idx, 0))
+
         self.autocheck_box = QCheckBox("自动检查新一期并下载")
         self.autocheck_box.setChecked(config.auto_check_enabled)
 
@@ -209,7 +216,8 @@ class SettingsDialog(QDialog):
         self.interval_spin.setValue(config.auto_check_interval_hours)
 
         form = QFormLayout()
-        form.addRow("PDF 保存位置", out_row_w)
+        form.addRow("保存位置", out_row_w)
+        form.addRow("输出格式", self.format_combo)
         form.addRow("外观", self.theme_combo)
         form.addRow("内容来源", self.source_combo)
         form.addRow("请求间隔（礼貌抓取，避免过快请求）", self.delay_spin)
@@ -231,6 +239,7 @@ class SettingsDialog(QDialog):
 
     def save(self):
         config.output_dir = self.output_edit.text()
+        config.output_format = self.format_combo.currentData()
         config.theme_mode = self.theme_combo.currentData()
         config.active_source_id = self.source_combo.currentData()
         config.request_delay_seconds = self.delay_spin.value() / 1000.0
@@ -419,6 +428,9 @@ class MainWindow(QMainWindow):
         self.download_all_btn.setObjectName("Primary")
         self.download_all_btn.clicked.connect(self._download_all_current_year)
 
+        self.year_epub_btn = QPushButton("生成年度 EPUB")
+        self.year_epub_btn.clicked.connect(self._build_year_epub)
+
         refresh_btn = QPushButton("刷新")
         refresh_btn.clicked.connect(self.worker.request_years)
 
@@ -426,6 +438,7 @@ class MainWindow(QMainWindow):
         settings_btn.clicked.connect(self._open_settings)
 
         layout.addWidget(self.download_all_btn)
+        layout.addWidget(self.year_epub_btn)
         layout.addWidget(refresh_btn)
         layout.addWidget(settings_btn)
         return bar
@@ -529,6 +542,12 @@ class MainWindow(QMainWindow):
         for row in self._rows.values():
             if row.issue.state in (DownloadState.PENDING, DownloadState.FAILED):
                 self.worker.request_download(row.issue)
+
+    def _build_year_epub(self):
+        issues = [row.issue for row in self._rows.values()]
+        if issues:
+            self.worker.request_year_epub(issues)
+            self._log(f"已提交 {issues[0].year} 年 EPUB 合订本任务…")
 
     def _open_settings(self):
         dlg = SettingsDialog(self.theme, self)

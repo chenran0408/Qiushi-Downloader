@@ -20,7 +20,7 @@ from PySide6.QtCore import QSettings, QStandardPaths
 ORG_NAME = "qiushi-tools"
 APP_NAME = "QiushiDownloader"
 APP_DISPLAY_NAME = "求是刊读下载器"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 APP_AUTHOR = "本工具作者"
 APP_COPYRIGHT_YEAR = "2026"
 APP_HOMEPAGE = "https://www.qstheory.cn"
@@ -62,6 +62,15 @@ class AppConfig:
         self._settings = QSettings(ORG_NAME, APP_NAME)
 
     # -- output ---------------------------------------------------------
+    @property
+    def output_format(self) -> str:
+        """'pdf' | 'epub' | 'both'. PDF remains the default for compatibility."""
+        return self._settings.value("output_format", "pdf")
+
+    @output_format.setter
+    def output_format(self, value: str):
+        self._settings.setValue("output_format", value)
+
     @property
     def output_dir(self) -> Path:
         val = self._settings.value("output_dir", str(default_output_dir()))

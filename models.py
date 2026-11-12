@@ -42,6 +42,8 @@ class Issue:
     publish_dt: datetime | None  # exact publish date/time if the site provides one
     cover_image_url: str = ""
     articles: list[Article] = field(default_factory=list)
+    expected_article_count: int = 0
+    failed_articles: list[str] = field(default_factory=list)
 
     state: DownloadState = DownloadState.PENDING
     progress: float = 0.0        # 0..1, used by the UI progress bar
