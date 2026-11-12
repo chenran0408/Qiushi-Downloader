@@ -156,10 +156,10 @@ class DownloadWorker(QThread):
 
         try:
             source.fetch_issue_detail(issue, progress_cb=on_progress)
-        except ScrapeError as exc:
+        except Exception as exc:
             issue.state = DownloadState.FAILED
-            issue.error = str(exc)
-            self.issue_failed.emit(issue, str(exc))
+            issue.error = f"抓取失败：{exc}"
+            self.issue_failed.emit(issue, issue.error)
             return
 
         if not issue.articles:
@@ -213,7 +213,7 @@ class DownloadWorker(QThread):
                 continue
             try:
                 source.fetch_issue_detail(issue)
-            except ScrapeError as exc:
+            except Exception as exc:
                 issue.expected_article_count = max(issue.expected_article_count, 1)
                 issue.failed_articles.append(f"期号抓取失败：{issue.title} ({exc})")
                 self.log_message.emit(f"跳过失败期号：{issue.title}；年度合订本将标记为不完整")

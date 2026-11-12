@@ -43,6 +43,8 @@ from models import Article, Issue
 
 log = logging.getLogger("qiushi.scraper")
 
+CACHE_VERSION = "html-v2"
+
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
     "(KHTML, like Gecko) Version/17.0 Safari/605.1.15 QiushiDownloader/1.0"
@@ -88,7 +90,7 @@ class SourcePlugin(ABC):
     def _get(self, url: str) -> BeautifulSoup:
         cached_body = cached_meta = None
         if self.cache_dir:
-            key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+            key = hashlib.sha256(f"{CACHE_VERSION}:{url}".encode("utf-8")).hexdigest()
             cached_body = self.cache_dir / f"{key}.html"
             cached_meta = self.cache_dir / f"{key}.meta"
             if cached_body.exists() and cached_meta.exists():
@@ -220,7 +222,10 @@ class QstheorySource(SourcePlugin):
             except ValueError:
                 issue.publish_dt = None
 
-        cover = soup.find("img", src=True)
+        cover = soup.select_one("img.cover, .cover img, .magazine-cover img, .issue-cover img")
+        if not cover:
+            cover = next((img for img in soup.find_all("img", src=True)
+                          if not any(h in (img.get("src") or "") for h in _SKIP_IMAGE_HINTS)), None)
         if cover:
             issue.cover_image_url = urljoin(issue.toc_url, cover["src"])
 
@@ -336,6 +341,9 @@ class QstheorySource(SourcePlugin):
         images: list[str] = []
         root = BeautifulSoup(str(node), "lxml")
         for el in list(root.find_all(True)):
+            if el.name in {"script", "style", "iframe", "object", "embed", "form", "noscript"}:
+                el.decompose()
+                continue
             if el.name not in allowed:
                 el.unwrap()
                 continue
