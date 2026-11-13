@@ -59,6 +59,10 @@ CONTENT_SELECTORS = [
 # Filenames like zxcode_xxx.jpg are the site's share/QR-code stamp, not
 # real article imagery — skip them.
 _SKIP_IMAGE_HINTS = ("zxcode", "weixin_share", "n7/images", "n6/images")
+_SITE_DISCLAIMER_TITLES = {"网站声明", "网站声明页"}
+
+def _is_site_disclaimer_title(title: str) -> bool:
+    return title.strip().strip("【】[]()（）") in _SITE_DISCLAIMER_TITLES
 
 
 class ScrapeError(RuntimeError):
@@ -265,6 +269,8 @@ class QstheorySource(SourcePlugin):
             href = urljoin(toc_url, a["href"])
             if not text or len(text) < 2:
                 continue
+            if _is_site_disclaimer_title(text):
+                continue
             parsed = urlparse(href)
             if parsed.netloc and host not in parsed.netloc:
                 continue
@@ -362,7 +368,12 @@ class QstheorySource(SourcePlugin):
             first_text = block.find(string=True)
             if first_text:
                 first_text.replace_with(re.sub(r"^[\s\u00a0\u2003\u3000]+", "", str(first_text)))
-        return "".join(str(child) for child in body.contents).strip(), images
+        cleaned = "".join(str(child) for child in body.contents).strip()
+        for marker in ("网站编辑", "网站声明"):
+            marker_index = cleaned.find(marker)
+            if marker_index >= 0:
+                cleaned = cleaned[:marker_index].rstrip()
+        return cleaned, images
 
 
 # ---------------------------------------------------------------------------

@@ -48,5 +48,17 @@ class EpubBuilderTests(unittest.TestCase):
             self.assertFalse(report.complete)
             self.assertIn('缺失文章', report.missing_articles)
 
+    def test_site_disclaimer_is_removed(self):
+        with tempfile.TemporaryDirectory() as d:
+            issue = self.issue(1, '正文')
+            issue.articles.append(Article('网站声明', 'https://example.test/disclaimer', html_body='<p>网站声明</p>'))
+            out = Path(d) / 'clean.epub'
+            report = build_issue_epub(issue, out, fetcher=FakeFetcher())
+            self.assertTrue(report.complete)
+            with zipfile.ZipFile(out) as z:
+                text = z.read('OEBPS/nav.xhtml').decode()
+                self.assertIn('正文', text)
+                self.assertNotIn('网站声明', text)
+
 if __name__ == '__main__':
     unittest.main()

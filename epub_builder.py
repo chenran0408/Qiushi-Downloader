@@ -20,6 +20,10 @@ from bs4 import BeautifulSoup
 from models import Issue
 
 RESOURCE_CACHE_VERSION = "resource-v2"
+_SITE_DISCLAIMER_TITLES = {"网站声明", "网站声明页"}
+
+def _is_site_disclaimer_title(title: str) -> bool:
+    return title.strip().strip("【】[]()（）") in _SITE_DISCLAIMER_TITLES
 
 _CSS = '''body{font-family:serif;line-height:1.85;margin:5%;color:inherit}
 h1{text-align:center;font-size:1.55em;margin:1.5em 0 .8em}h2,h3{margin:1.6em 0 .6em}
@@ -101,7 +105,12 @@ def _clean_fragment(fragment: str, base_url: str, fetcher: ResourceFetcher, repo
         if first_text:
             block_text = str(first_text)
             first_text.replace_with(re.sub(r"^[\s\u00a0\u2003\u3000]+", "", block_text))
-    return "".join(str(x) for x in root.contents).strip()
+    cleaned = "".join(str(x) for x in root.contents).strip()
+    for marker in ("网站编辑", "网站声明"):
+        marker_index = cleaned.find(marker)
+        if marker_index >= 0:
+            cleaned = cleaned[:marker_index].rstrip()
+    return cleaned
 
 def _xhtml(title: str, body: str, stylesheet: str = "../styles/style.css") -> bytes:
     return (f'<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN"><head><meta charset="utf-8"/><title>{html.escape(title)}</title><link rel="stylesheet" type="text/css" href="{stylesheet}"/></head><body>{body}</body></html>').encode()
@@ -116,7 +125,7 @@ def build_year_epub(issues: list[Issue], output_path: str|Path, cache_dir: str|P
     ordered = sorted(issues, key=lambda i:i.sort_key); title = f"《求是》{ordered[0].year}年合订本" if ordered else "《求是》年度合订本"; return build_epub(ordered, output_path, title, cache_dir, fetcher)
 
 def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir: str|Path|None=None, fetcher: ResourceFetcher|None=None) -> QualityReport:
-    articles = [a for issue in issues for a in issue.articles]; expected = sum((i.expected_article_count or len(i.articles)) for i in issues); report = QualityReport(expected); seen = set()
+    articles = [a for issue in issues for a in issue.articles if not _is_site_disclaimer_title(a.title)]; expected = sum((i.expected_article_count or len([a for a in i.articles if not _is_site_disclaimer_title(a.title)])) for i in issues); report = QualityReport(expected); seen = set()
     report.missing_articles.extend(title for issue in issues for title in issue.failed_articles)
     for a in articles:
         if a.title in seen: report.duplicate_titles.append(a.title)
@@ -139,6 +148,8 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
             pages.append((issue_path, _xhtml(issue.title, f'<h1 class="issue-title">{html.escape(issue.title)}</h1>')))
             page_titles[issue_path] = issue.title
         for article in issue.articles:
+            if _is_site_disclaimer_title(article.title):
+                continue
             idx += 1; path = _slug(idx, article.title)
             metadata = f"<p><em>{html.escape(issue.title)}"
             if issue.display_date: metadata += f" · {html.escape(issue.display_date)}"
