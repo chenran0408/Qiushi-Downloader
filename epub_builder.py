@@ -8,6 +8,7 @@ import re
 import time
 import uuid
 import zipfile
+from io import BytesIO
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +64,22 @@ class ResourceFetcher:
 def _normalise_media_type(media_type: str) -> str:
     return {"image/jpg": "image/jpeg", "image/pjpeg": "image/jpeg"}.get(media_type, media_type or "application/octet-stream")
 
+def _lossless_image_bytes(data: bytes, media_type: str) -> bytes:
+    """Optimize PNGs without changing pixels; leave lossy formats untouched."""
+    if media_type != "image/png":
+        return data
+    try:
+        from PIL import Image
+        image = Image.open(BytesIO(data))
+        if getattr(image, "is_animated", False):
+            return data
+        optimized = BytesIO()
+        image.save(optimized, format="PNG", optimize=True)
+        candidate = optimized.getvalue()
+        return candidate if len(candidate) < len(data) else data
+    except Exception:
+        return data
+
 def _clean_fragment(fragment: str, base_url: str, fetcher: ResourceFetcher, report: QualityReport, resources: dict[str,tuple[str,bytes,str]]) -> str:
     soup = BeautifulSoup(fragment or "", "lxml"); root = soup.body or soup
     for node in list(root.find_all(True)):
@@ -76,9 +93,14 @@ def _clean_fragment(fragment: str, base_url: str, fetcher: ResourceFetcher, repo
             if not src: node.decompose(); continue
             absolute = src if urlparse(src).scheme else requests.compat.urljoin(base_url, src)
             try:
-                data, ctype = fetcher.fetch(absolute); ext = mimetypes.guess_extension(ctype) or Path(urlparse(absolute).path).suffix or ".bin"; name = f"images/{hashlib.sha256(data).hexdigest()[:16]}{ext.lower()}"
-                resources.setdefault(name, (_normalise_media_type(ctype), data, absolute)); node.attrs = {"src":f"../{name}","alt":node.get("alt","")}
+                data, ctype = fetcher.fetch(absolute); ctype = _normalise_media_type(ctype); data = _lossless_image_bytes(data, ctype); ext = mimetypes.guess_extension(ctype) or Path(urlparse(absolute).path).suffix or ".bin"; name = f"images/{hashlib.sha256(data).hexdigest()[:16]}{ext.lower()}"
+                resources.setdefault(name, (ctype, data, absolute)); node.attrs = {"src":f"../{name}","alt":node.get("alt","")}
             except Exception: report.failed_resources.append(absolute); node.decompose()
+    for block in root.find_all(["p", "li", "blockquote"]):
+        first_text = block.find(string=True)
+        if first_text:
+            block_text = str(first_text)
+            first_text.replace_with(re.sub(r"^[\s\u00a0\u2003\u3000]+", "", block_text))
     return "".join(str(x) for x in root.contents).strip()
 
 def _xhtml(title: str, body: str, stylesheet: str = "../styles/style.css") -> bytes:
@@ -104,10 +126,10 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
     cover_url = next((issue.cover_image_url for issue in issues if issue.cover_image_url), "")
     if cover_url:
         try:
-            cover_data, cover_type = fetcher.fetch(cover_url)
+            cover_data, cover_type = fetcher.fetch(cover_url); cover_type = _normalise_media_type(cover_type); cover_data = _lossless_image_bytes(cover_data, cover_type)
             cover_ext = mimetypes.guess_extension(cover_type) or Path(urlparse(cover_url).path).suffix or ".bin"
-            cover_name = f"images/cover-{hashlib.sha256(cover_data).hexdigest()[:16]}{cover_ext.lower()}"
-            resources[cover_name] = (_normalise_media_type(cover_type), cover_data, cover_url)
+            cover_name = f"images/{hashlib.sha256(cover_data).hexdigest()[:16]}{cover_ext.lower()}"
+            resources.setdefault(cover_name, (cover_type, cover_data, cover_url))
             cover_href = f"../{cover_name}"
         except Exception:
             report.failed_resources.append(cover_url)

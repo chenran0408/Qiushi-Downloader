@@ -13,7 +13,7 @@ class FakeFetcher:
 
 class EpubBuilderTests(unittest.TestCase):
     def issue(self, no, title):
-        return Issue('test', 2025, no, f'2025年第{no}期', 'https://example.test/toc', datetime(2025, 1, no), cover_image_url='https://example.test/cover.png', articles=[Article(title, 'https://example.test/article', html_body='<p>中文<strong>正文</strong></p><script>alert(1)</script><style>bad{}</style><img src="/a.png" alt="图">')])
+        return Issue('test', 2025, no, f'2025年第{no}期', 'https://example.test/toc', datetime(2025, 1, no), cover_image_url='https://example.test/cover.png', articles=[Article(title, 'https://example.test/article', html_body='<p>\u2003\u2003中文<strong>正文</strong></p><script>alert(1)</script><style>bad{}</style><img src="/a.png" alt="图">')])
 
     def test_single_issue_is_offline_and_semantic(self):
         with tempfile.TemporaryDirectory() as d:
@@ -28,6 +28,7 @@ class EpubBuilderTests(unittest.TestCase):
                 self.assertIn('<strong>正文</strong>', body)
                 self.assertNotIn('alert(1)', body)
                 self.assertNotIn('bad{}', body)
+                self.assertNotIn('\u2003', body)
                 self.assertIn('原文链接', body)
                 self.assertTrue(any(n.startswith('OEBPS/images/') for n in names))
                 self.assertIn('cover-image', z.read('OEBPS/content.opf').decode())

@@ -358,6 +358,10 @@ class QstheorySource(SourcePlugin):
             elif el.name == "a" and el.get("href", "").lower().startswith(("javascript:", "data:")):
                 el.unwrap()
         body = root.body or root
+        for block in body.find_all(["p", "li", "blockquote"]):
+            first_text = block.find(string=True)
+            if first_text:
+                first_text.replace_with(re.sub(r"^[\s\u00a0\u2003\u3000]+", "", str(first_text)))
         return "".join(str(child) for child in body.contents).strip(), images
 
 
