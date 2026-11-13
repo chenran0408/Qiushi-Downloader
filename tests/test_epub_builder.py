@@ -2,9 +2,12 @@ import tempfile
 import unittest
 import zipfile
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
-from epub_builder import build_issue_epub, build_year_epub
+from PIL import Image
+
+from epub_builder import build_issue_epub, build_year_epub, _mobile_image_bytes
 from models import Article, Issue
 
 class FakeFetcher:
@@ -59,6 +62,13 @@ class EpubBuilderTests(unittest.TestCase):
                 text = z.read('OEBPS/nav.xhtml').decode()
                 self.assertIn('正文', text)
                 self.assertNotIn('网站声明', text)
+
+    def test_mobile_jpeg_profile_keeps_dimensions_within_limit(self):
+        image = Image.new('RGB', (2400, 1200), (120, 80, 40)); source = BytesIO(); image.save(source, 'JPEG', quality=100)
+        optimized = _mobile_image_bytes(source.getvalue(), 'image/jpeg')
+        result = Image.open(BytesIO(optimized))
+        self.assertEqual(result.width, 1600)
+        self.assertLess(len(optimized), len(source.getvalue()))
 
 if __name__ == '__main__':
     unittest.main()

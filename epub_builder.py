@@ -21,6 +21,8 @@ from models import Issue
 
 RESOURCE_CACHE_VERSION = "resource-v2"
 _SITE_DISCLAIMER_TITLES = {"网站声明", "网站声明页"}
+MOBILE_MAX_IMAGE_WIDTH = 1600
+MOBILE_JPEG_QUALITY = 88
 
 def _is_site_disclaimer_title(title: str) -> bool:
     return title.strip().strip("【】[]()（）") in _SITE_DISCLAIMER_TITLES
@@ -68,17 +70,23 @@ class ResourceFetcher:
 def _normalise_media_type(media_type: str) -> str:
     return {"image/jpg": "image/jpeg", "image/pjpeg": "image/jpeg"}.get(media_type, media_type or "application/octet-stream")
 
-def _lossless_image_bytes(data: bytes, media_type: str) -> bytes:
-    """Optimize PNGs without changing pixels; leave lossy formats untouched."""
-    if media_type != "image/png":
+def _mobile_image_bytes(data: bytes, media_type: str) -> bytes:
+    """Prepare images for phones/tablets without cropping content."""
+    if media_type not in {"image/png", "image/jpeg"}:
         return data
     try:
         from PIL import Image
         image = Image.open(BytesIO(data))
         if getattr(image, "is_animated", False):
             return data
+        if image.width > MOBILE_MAX_IMAGE_WIDTH:
+            height = round(image.height * MOBILE_MAX_IMAGE_WIDTH / image.width)
+            image = image.resize((MOBILE_MAX_IMAGE_WIDTH, height), Image.Resampling.LANCZOS)
         optimized = BytesIO()
-        image.save(optimized, format="PNG", optimize=True)
+        if media_type == "image/jpeg":
+            image.convert("RGB").save(optimized, format="JPEG", quality=MOBILE_JPEG_QUALITY, optimize=True, progressive=True, subsampling=2)
+        else:
+            image.save(optimized, format="PNG", optimize=True)
         candidate = optimized.getvalue()
         return candidate if len(candidate) < len(data) else data
     except Exception:
@@ -97,7 +105,7 @@ def _clean_fragment(fragment: str, base_url: str, fetcher: ResourceFetcher, repo
             if not src: node.decompose(); continue
             absolute = src if urlparse(src).scheme else requests.compat.urljoin(base_url, src)
             try:
-                data, ctype = fetcher.fetch(absolute); ctype = _normalise_media_type(ctype); data = _lossless_image_bytes(data, ctype); ext = mimetypes.guess_extension(ctype) or Path(urlparse(absolute).path).suffix or ".bin"; name = f"images/{hashlib.sha256(data).hexdigest()[:16]}{ext.lower()}"
+                data, ctype = fetcher.fetch(absolute); ctype = _normalise_media_type(ctype); data = _mobile_image_bytes(data, ctype); ext = mimetypes.guess_extension(ctype) or Path(urlparse(absolute).path).suffix or ".bin"; name = f"images/{hashlib.sha256(data).hexdigest()[:16]}{ext.lower()}"
                 resources.setdefault(name, (ctype, data, absolute)); node.attrs = {"src":f"../{name}","alt":node.get("alt","")}
             except Exception: report.failed_resources.append(absolute); node.decompose()
     for block in root.find_all(["p", "li", "blockquote"]):
@@ -135,7 +143,7 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
     cover_url = next((issue.cover_image_url for issue in issues if issue.cover_image_url), "")
     if cover_url:
         try:
-            cover_data, cover_type = fetcher.fetch(cover_url); cover_type = _normalise_media_type(cover_type); cover_data = _lossless_image_bytes(cover_data, cover_type)
+            cover_data, cover_type = fetcher.fetch(cover_url); cover_type = _normalise_media_type(cover_type); cover_data = _mobile_image_bytes(cover_data, cover_type)
             cover_ext = mimetypes.guess_extension(cover_type) or Path(urlparse(cover_url).path).suffix or ".bin"
             cover_name = f"images/{hashlib.sha256(cover_data).hexdigest()[:16]}{cover_ext.lower()}"
             resources.setdefault(cover_name, (cover_type, cover_data, cover_url))
