@@ -138,7 +138,7 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
     for a in articles:
         if a.title in seen: report.duplicate_titles.append(a.title)
         seen.add(a.title)
-    fetcher = fetcher or ResourceFetcher(cache_dir); resources = {}; pages = []; page_titles = {}; idx = 0
+    fetcher = fetcher or ResourceFetcher(cache_dir); resources = {}; pages = []; page_titles = {}; toc_groups = []; idx = 0
     cover_href = ""
     cover_url = next((issue.cover_image_url for issue in issues if issue.cover_image_url), "")
     if cover_url:
@@ -151,10 +151,12 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
         except Exception:
             report.failed_resources.append(cover_url)
     for issue in issues:
+        group = {"path": "", "title": issue.title, "articles": []}
         if len(issues) > 1:
             issue_path = f"text/issue-{issue.issue_no:03d}.xhtml"
             pages.append((issue_path, _xhtml(issue.title, f'<h1 class="issue-title">{html.escape(issue.title)}</h1>')))
             page_titles[issue_path] = issue.title
+            group["path"] = issue_path
         for article in issue.articles:
             if _is_site_disclaimer_title(article.title):
                 continue
@@ -166,15 +168,30 @@ def build_epub(issues: list[Issue], output_path: str|Path, title: str, cache_dir
             body = f"<h1>{html.escape(article.title)}</h1>{metadata}"
             cleaned = _clean_fragment(article.html_body, article.url, fetcher, report, resources)
             if not cleaned: report.missing_articles.append(article.title); continue
-            pages.append((path, _xhtml(article.title, body + cleaned))); page_titles[path] = article.title; report.written_articles += 1
-    nav_items = "".join(f'<li><a href="{p}">{html.escape(page_titles[p])}</a></li>' for p,_ in pages); nav = _xhtml(title, f"<h1>{html.escape(title)}</h1><ol class=\"toc\">{nav_items}</ol>", "styles/style.css"); cover_img = f'<img src="{cover_href}" alt="封面"/>' if cover_href else ""; cover = _xhtml(title, f'<section class="cover">{cover_img}<h1>{html.escape(title)}</h1><p>个人离线阅读归档</p></section>')
+            pages.append((path, _xhtml(article.title, body + cleaned))); page_titles[path] = article.title; group["articles"].append((path, article.title)); report.written_articles += 1
+        toc_groups.append(group)
+    if len(issues) > 1:
+        nav_items = "".join(f'<li><a href="{g["path"]}">{html.escape(g["title"])}</a><ol>' + "".join(f'<li><a href="{p}">{html.escape(t)}</a></li>' for p,t in g["articles"]) + '</ol></li>' for g in toc_groups)
+    else:
+        nav_items = "".join(f'<li><a href="{p}">{html.escape(t)}</a></li>' for p,t in toc_groups[0]["articles"])
+    nav = _xhtml(title, f"<h1>{html.escape(title)}</h1><ol class=\"toc\">{nav_items}</ol>", "styles/style.css"); cover_img = f'<img src="{cover_href}" alt="封面"/>' if cover_href else ""; cover = _xhtml(title, f'<section class="cover">{cover_img}<h1>{html.escape(title)}</h1><p>个人离线阅读归档</p></section>')
     manifest = ['<item id="nav" properties="nav" href="nav.xhtml" media-type="application/xhtml+xml"/>','<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>','<item id="style" href="styles/style.css" media-type="text/css"/>','<item id="cover" href="text/cover.xhtml" media-type="application/xhtml+xml"/>']; spine = ['<itemref idref="cover"/>']
     for n,(path,_) in enumerate(pages): manifest.append(f'<item id="p{n}" href="{path}" media-type="application/xhtml+xml"/>'); spine.append(f'<itemref idref="p{n}"/>')
     for n,(path,(ctype,_,_)) in enumerate(resources.items()):
         prop = ' properties="cover-image"' if path == cover_href.removeprefix("../") else ""
         manifest.append(f'<item id="img{n}" href="{path}" media-type="{ctype}"{prop}/>')
     uid = str(uuid.uuid4()); modified = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"); source_meta = "".join(f"<dc:source>{html.escape(issue.toc_url)}</dc:source>" for issue in issues if issue.toc_url); opf = f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:{uid}</dc:identifier><dc:title>{html.escape(title)}</dc:title><dc:language>zh-CN</dc:language>{source_meta}<meta property="dcterms:modified">{modified}</meta></metadata><manifest>{"".join(manifest)}</manifest><spine toc="ncx">{"".join(spine)}</spine></package>'.encode()
-    ncx_items = ''.join(f'<navPoint id="n{i}" playOrder="{i}"><navLabel><text>{html.escape(page_titles[p])}</text></navLabel><content src="{p}"/></navPoint>' for i,(p,_) in enumerate(pages,1)); ncx = f'<?xml version="1.0" encoding="UTF-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="urn:uuid:{uid}"/></head><docTitle><text>{html.escape(title)}</text></docTitle><navMap>{ncx_items}</navMap></ncx>'.encode()
+    order = 0; ncx_parts = []
+    for group in toc_groups:
+        if len(issues) > 1:
+            order += 1; children = []
+            for path, article_title in group["articles"]:
+                order += 1; children.append(f'<navPoint id="n{order}" playOrder="{order}"><navLabel><text>{html.escape(article_title)}</text></navLabel><content src="{path}"/></navPoint>')
+            ncx_parts.append(f'<navPoint id="n{order-len(children)}" playOrder="{order-len(children)}"><navLabel><text>{html.escape(group["title"])}</text></navLabel><content src="{group["path"]}"/>{"".join(children)}</navPoint>')
+        else:
+            for path, article_title in group["articles"]:
+                order += 1; ncx_parts.append(f'<navPoint id="n{order}" playOrder="{order}"><navLabel><text>{html.escape(article_title)}</text></navLabel><content src="{path}"/></navPoint>')
+    ncx_items = "".join(ncx_parts); ncx = f'<?xml version="1.0" encoding="UTF-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="urn:uuid:{uid}"/></head><docTitle><text>{html.escape(title)}</text></docTitle><navMap>{ncx_items}</navMap></ncx>'.encode()
     out = Path(output_path); out.parent.mkdir(parents=True, exist_ok=True); temp = out.with_name(f".{out.name}.tmp")
     try:
         with zipfile.ZipFile(temp,"w") as z:

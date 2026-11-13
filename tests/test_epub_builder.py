@@ -46,6 +46,7 @@ class EpubBuilderTests(unittest.TestCase):
             self.assertTrue(report.complete)
             data = zipfile.ZipFile(out).read('OEBPS/nav.xhtml').decode()
             self.assertLess(data.index('issue-001'), data.index('issue-002'))
+            self.assertIn('<li><a href="text/issue-001.xhtml">2025年第1期</a><ol>', data)
             first.failed_articles.append('缺失文章')
             report = build_year_epub([first, second], Path(d) / 'incomplete.epub', fetcher=FakeFetcher())
             self.assertFalse(report.complete)
